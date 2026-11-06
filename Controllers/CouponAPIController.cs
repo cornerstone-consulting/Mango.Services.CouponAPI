@@ -16,10 +16,10 @@ namespace Mango.Services.CouponAPI.Controllers
     [Authorize]
     public class CouponAPIController : ControllerBase
     {
-        private readonly AppDbContext _db;
+        private readonly CouponDbContext _db;
         private ResponseDto _response;
         private IMapper _mapper;
-
+        
         //TODO: With Clean Architecture Try To Decouple This
         /// <summary> 
         /// SDE-Observation
@@ -29,7 +29,7 @@ namespace Mango.Services.CouponAPI.Controllers
         /// </summary>
         /// <param name="db"></param>
         /// <param name="mapper"></param>
-        public CouponAPIController(AppDbContext db, IMapper mapper)
+        public CouponAPIController(CouponDbContext db, IMapper mapper)
         {
             _db = db;
             _mapper = mapper;

@@ -23,35 +23,86 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 
 
+var databaseProvider =
+    builder.Configuration["Database:Provider"] ?? "SqlServer";
+
+var connectionStringKey =
+    databaseProvider.Trim().Equals(
+        "PostgreSQL",
+        StringComparison.OrdinalIgnoreCase)
+        || databaseProvider.Trim().Equals(
+        "Postgres",
+        StringComparison.OrdinalIgnoreCase)
+        ? "PostgreSqlConnection"
+        : "DefaultConnection";
+
 var mangoOptions = new MangoOptions
 {
-    Secret =
-        builder.Configuration["ApiSettings:Secret"]
-        ?? string.Empty,
-
-    Issuer =
-        builder.Configuration["ApiSettings:Issuer"]
-        ?? string.Empty,
-
-    Audience =
-        builder.Configuration["ApiSettings:Audience"]
-        ?? string.Empty,
+    Secret = builder.Configuration["ApiSettings:Secret"] ?? string.Empty,
+    Issuer = builder.Configuration["ApiSettings:Issuer"] ?? string.Empty,
+    Audience = builder.Configuration["ApiSettings:Audience"] ?? string.Empty,
 
     DefaultConnection =
-    (isRunningInContainer
-        ? builder.Configuration["Docker:ConnectionStrings:DefaultConnection"]
-        : builder.Configuration["Http:ConnectionStrings:DefaultConnection"])
-    ?? string.Empty
+        (isRunningInContainer
+            ? builder.Configuration[$"Docker:ConnectionStrings:{connectionStringKey}"]
+            : builder.Configuration[$"Http:ConnectionStrings:{connectionStringKey}"])
+        ?? string.Empty
 };
 
 builder.Services.AddSingleton(
     Microsoft.Extensions.Options.Options.Create(mangoOptions));
 // Add services to the container.
 
+var connectionString = mangoOptions.DefaultConnection;
+
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    throw new InvalidOperationException(
+        "The database connection string is missing.");
+}
+
+
+var normalizedProvider = databaseProvider.Trim().ToLowerInvariant();
+
+// SQL Server context: retains the existing SQL Server migrations.
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
-    options.UseSqlServer(mangoOptions.DefaultConnection);
+    options.UseSqlServer(connectionString);
 });
+
+// PostgreSQL context: will use its own migrations.
+builder.Services.AddDbContext<PostgreSqlAppDbContext>(options =>
+{
+    options.UseNpgsql(
+        connectionString,
+        npgsqlOptions =>
+        {
+            npgsqlOptions.MigrationsHistoryTable(
+                "__EFMigrationsHistory_PostgreSql");
+        });
+});
+
+// The controller and startup migration code use this shared base context.
+// Resolve the concrete context selected by configuration.
+if (normalizedProvider == "sqlserver")
+{
+    builder.Services.AddScoped<CouponDbContext>(
+        serviceProvider =>
+            serviceProvider.GetRequiredService<AppDbContext>());
+}
+else if (normalizedProvider == "postgresql" ||
+         normalizedProvider == "postgres")
+{
+    builder.Services.AddScoped<CouponDbContext>(
+        serviceProvider =>
+            serviceProvider.GetRequiredService<PostgreSqlAppDbContext>());
+}
+else
+{
+    throw new InvalidOperationException(
+        $"Unsupported database provider: {databaseProvider}");
+}
+
 
 IMapper mapper = MappingConfig.RegisterMaps().CreateMapper();
 builder.Services.AddSingleton(mapper);
@@ -140,7 +191,7 @@ void ApplyMigration()
 {
     using (var scope = app.Services.CreateScope())
     {
-        var _db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var _db = scope.ServiceProvider.GetRequiredService<CouponDbContext>();
 
         if (_db.Database.GetPendingMigrations().Count() > 0)
         {
